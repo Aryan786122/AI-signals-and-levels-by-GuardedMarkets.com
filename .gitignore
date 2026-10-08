@@ -1,0 +1,58 @@
+# Dependencies
+node_modules/
+/.pnp
+.pnp.js
+
+# Testing
+/coverage
+
+# Next.js
+/.next/
+/out/
+
+# Production & Packaging
+/build
+dist/
+test_install/
+*.exe
+public/*.exe
+
+# Python Virtual Environment
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Misc & Logs
+.DS_Store
+*.pem
+*.log
+run_log*.txt
+temp_frames.json
+
+# Local env files
+.env*.local
+.env
+
+# Prisma & SQLite
+dev.db
+dev.db-journal
+prisma/dev.db
+prisma/dev.db-journal
+
+# Storage uploaded media & models (keep directories via .gitkeep)
+storage/videos/*
+!storage/videos/.gitkeep
+storage/audio/*
+!storage/audio/.gitkeep
+storage/frames/*
+!storage/frames/.gitkeep
+storage/screenshots/*
+!storage/screenshots/.gitkeep
+storage/models/*
+!storage/models/.gitkeep
+output/
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts

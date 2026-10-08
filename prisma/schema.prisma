@@ -1,0 +1,852 @@
+// GuardedMarketsAI Relational Knowledge & Trading Engine Schema
+// Optimized for SQLite local development; see schema.postgresql.prisma for PostgreSQL
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  role      String   @default("TEACHER") // TEACHER, STUDENT_OBSERVER
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  lessons         Lesson[]
+  feedbacks       TeacherFeedback[]
+  evaluations     Evaluation[]
+  corrections     Correction[]
+}
+
+model Lesson {
+  id             String   @id @default(cuid())
+  title          String
+  description    String?
+  durationSec    Int?
+  videoUrl       String?
+  videoPath      String?
+  mimeType       String?
+  fileSizeBytes  Int?
+  status         String   @default("DRAFT") // DRAFT, EXTRACTED, REVIEW_PENDING, APPROVED, REJECTED
+  analysisState  String   @default("TEXT_ONLY") // TEXT_ONLY, VOICE_ANALYZED, VIDEO_ANALYZED, MULTIMODAL_COMPLETE
+  processingStage    String   @default("UPLOADED") // UPLOADED, EXTRACTING_AUDIO, TRANSCRIBING, EXTRACTING_FRAMES, ANALYZING_FRAMES, TEMPORAL_FUSION, KNOWLEDGE_EXTRACTION, REVIEW_READY, FAILED
+  processingProgress Float    @default(0) // 0 - 100
+  processingError    String?
+  videoDurationSec   Float?
+  mediaAssetId       String?  // Canonical MediaAsset ID
+  mediaInspection    String?  // JSON: MediaInspection facts (duration, resolution, fps, codecs, channels)
+  transcriptCoverage Float?   // e.g. 98.4 (%)
+  diagnostics        String?  // JSON: Full processing diagnostic telemetry
+  teacherNotes   String?
+  extractedAt    DateTime?
+  approvedAt     DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  userId         String?
+  user           User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  assets         LessonAsset[]
+  transcripts    Transcript[]
+  knowledgeItems KnowledgeItem[]
+  rules          Rule[]
+  examples       Example[]
+  counterExamples CounterExample[]
+  corrections    Correction[]
+  knowledgeVersions KnowledgeVersion[]
+  teachingEvents TeachingEvent[]
+  videoFrames    VideoFrame[]
+  teachingSegments TeachingSegment[]
+  teachingClaims TeachingClaim[]
+
+  @@index([status])
+  @@index([processingStage])
+  @@index([createdAt])
+}
+
+model LessonAsset {
+  id           String   @id @default(cuid())
+  lessonId     String
+  lesson       Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  assetType    String   // VIDEO, AUDIO, KEYFRAME, SCREENSHOT, CHART
+  filePath     String
+  fileName     String
+  fileSize     Int
+  mimeType     String
+  timestampSec Float?
+  durationSec  Float?
+  hasAudio     Boolean  @default(false)
+  hasVideo     Boolean  @default(false)
+  metadata     String?  // JSON string
+  createdAt    DateTime @default(now())
+
+  @@index([lessonId])
+  @@index([assetType])
+}
+
+model Transcript {
+  id         String   @id @default(cuid())
+  lessonId   String
+  lesson     Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  fullText   String
+  language   String   @default("en")
+  provider   String   @default("whisper")
+  confidence Float?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  segments   TranscriptSegment[]
+
+  @@index([lessonId])
+}
+
+model TranscriptSegment {
+  id           String     @id @default(cuid())
+  transcriptId String
+  transcript   Transcript @relation(fields: [transcriptId], references: [id], onDelete: Cascade)
+  startTimeSec Float
+  endTimeSec   Float
+  text         String
+  speaker      String?
+  confidence   Float?
+
+  @@index([transcriptId])
+  @@index([startTimeSec])
+}
+
+model Concept {
+  id              String   @id @default(cuid())
+  name            String   @unique
+  slug            String   @unique
+  category        String   // MARKET_STRUCTURE, ORDER_FLOW, LIQUIDITY, EXECUTION, RISK
+  definition      String
+  summary         String?
+  importance      Int      @default(1) // 1-5 scale
+  parentConceptId String?
+  parentConcept   Concept? @relation("ConceptHierarchy", fields: [parentConceptId], references: [id], onDelete: SetNull)
+  childConcepts   Concept[] @relation("ConceptHierarchy")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  rules           Rule[]
+  knowledgeItems  KnowledgeItem[]
+  examples        Example[]
+  counterExamples CounterExample[]
+  corrections     Correction[]
+  evaluations     EvaluationResult[]
+
+  @@index([slug])
+  @@index([category])
+}
+
+model KnowledgeItem {
+  id              String   @id @default(cuid())
+  type            String   // CONCEPT, DEFINITION, PRINCIPLE, RULE, CONDITION, EXCEPTION, SETUP, SCENARIO, EXAMPLE, COUNTEREXAMPLE, INVALIDATION, ENTRY_RULE, SL_RULE, TP_RULE, CONTEXT_RULE, PREFERENCE, OBSERVATION, CORRECTION
+  title           String
+  description     String
+  conditionsText  String?
+  exceptionsText  String?
+  priority        String   @default("CONDITIONAL_RULE") // CORE_RULE, STRONG_RULE, CONDITIONAL_RULE, PREFERENCE, OBSERVATION, EXAMPLE
+  confidence      Float?   @default(1.0)
+  status          String   @default("ACTIVE") // ACTIVE, SUPERSEDED, UNDER_REVIEW, DEPRECATED
+  embedding       String?  // JSON float array for local cosine similarity
+  sourceLessonId  String?
+  sourceLesson    Lesson?  @relation(fields: [sourceLessonId], references: [id], onDelete: SetNull)
+  conceptId       String?
+  concept         Concept? @relation(fields: [conceptId], references: [id], onDelete: SetNull)
+  supersedesId    String?
+  supersededById  String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  fromRelations   KnowledgeRelation[] @relation("RelationFrom")
+  toRelations     KnowledgeRelation[] @relation("RelationTo")
+
+  @@index([type])
+  @@index([status])
+  @@index([conceptId])
+  @@index([sourceLessonId])
+}
+
+model Rule {
+  id             String   @id @default(cuid())
+  title          String
+  statement      String
+  rationale      String?
+  priority       String   @default("CORE_RULE") // CORE_RULE, STRONG_RULE, CONDITIONAL_RULE, PREFERENCE, OBSERVATION, EXAMPLE
+  status         String   @default("ACTIVE") // ACTIVE, SUPERSEDED, UNDER_REVIEW, DEPRECATED
+  scope          String   @default("GLOBAL") // GLOBAL, ASSET_SPECIFIC, TIMEFRAME_SPECIFIC, SESSION_SPECIFIC, SCENARIO_SPECIFIC
+  specificity    Int      @default(1)
+  tradePhase     String   @default("SETUP_RECOGNITION") // SETUP_RECOGNITION, ENTRY, STOP_LOSS, TAKE_PROFIT, INVALIDATION, TRADE_MANAGEMENT, RISK_MANAGEMENT
+  teacherApproved Boolean @default(false)
+  evidenceCount  Int      @default(1)
+  confidence     Float    @default(1.0)
+  version        Int      @default(1)
+  
+  conceptId      String?
+  concept        Concept? @relation(fields: [conceptId], references: [id], onDelete: SetNull)
+  sourceLessonId String?
+  sourceLesson   Lesson?  @relation(fields: [sourceLessonId], references: [id], onDelete: SetNull)
+
+  supersededById String?
+  supersededBy   Rule?    @relation("RuleSupersession", fields: [supersededById], references: [id], onDelete: SetNull)
+  supersedes     Rule[]   @relation("RuleSupersession")
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  conditions     Condition[]
+  exceptions     Exception[]
+  versions       KnowledgeVersion[]
+  conflictsAsA   KnowledgeConflict[] @relation("ConflictRuleA")
+  conflictsAsB   KnowledgeConflict[] @relation("ConflictRuleB")
+  examples       Example[]
+  counterExamples CounterExample[]
+
+  @@index([status])
+  @@index([priority])
+  @@index([conceptId])
+  @@index([tradePhase])
+}
+
+model Condition {
+  id           String   @id @default(cuid())
+  ruleId       String
+  rule         Rule     @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  name         String
+  field        String   // e.g., "candle_body_close", "price_vs_resistance"
+  operator     String   // e.g., "ABOVE", "BELOW", "EQUALS", "IN_RANGE"
+  threshold    String?  // e.g., "0.0", "resistance_level"
+  timeframe    String?  // e.g., "5M", "1H"
+  isMandatory  Boolean  @default(true)
+  sequence     Int      @default(0)
+
+  @@index([ruleId])
+}
+
+model Exception {
+  id                 String   @id @default(cuid())
+  ruleId             String
+  rule               Rule     @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  name               String
+  description        String
+  overrideBehavior   String   // e.g., "AVOID_IMMEDIATE_ENTRY", "WAIT_FOR_RETEST", "INVALIDATE_SETUP"
+  conditionLogic     String   // e.g., "if breakout candle is excessively extended"
+  exampleContext     String?
+  parentExceptionId  String?
+  parentException    Exception?  @relation("NestedExceptions", fields: [parentExceptionId], references: [id], onDelete: SetNull)
+  childExceptions    Exception[] @relation("NestedExceptions")
+  specificity        Int         @default(2)
+  tradePhase         String      @default("SETUP_RECOGNITION")
+  teacherApproved    Boolean     @default(false)
+  createdAt          DateTime @default(now())
+
+  @@index([ruleId])
+  @@index([parentExceptionId])
+}
+
+model Setup {
+  id                 String   @id @default(cuid())
+  name               String   @unique
+  direction          String   // LONG, SHORT, NEUTRAL
+  description        String
+  defaultTimeframe   String   @default("5M")
+  triggerCondition   String
+  invalidationCriteria String
+  riskRewardMin      Float?   @default(2.0)
+  status             String   @default("ACTIVE") // ACTIVE, SUPERSEDED, UNDER_REVIEW
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  scenarios          Scenario[]
+  examples           Example[]
+  counterExamples    CounterExample[]
+
+  @@index([direction])
+  @@index([status])
+}
+
+model Scenario {
+  id                    String              @id @default(cuid())
+  setupId               String?
+  setup                 Setup?              @relation(fields: [setupId], references: [id], onDelete: SetNull)
+  name                  String
+  marketContext         String
+  expectedAction        String              // e.g., "LONG_CANDIDATE", "SHORT_CANDIDATE", "WAIT"
+  invalidationCondition String
+  status                String              @default("ACTIVE")
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  conditions            ScenarioCondition[]
+
+  @@index([setupId])
+}
+
+model ScenarioCondition {
+  id          String   @id @default(cuid())
+  scenarioId  String
+  scenario    Scenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+  stepOrder   Int
+  description String
+  logicOp     String   @default("AND") // AND, OR, NOT, IF_THEN, EXCEPT, UNLESS
+  isMet       Boolean?
+
+  @@index([scenarioId])
+  @@index([stepOrder])
+}
+
+model Example {
+  id             String   @id @default(cuid())
+  title          String
+  market         String   // e.g. "XAUUSD", "EURUSD", "NQ"
+  timeframe      String   // e.g. "5M", "15M"
+  direction      String   // LONG, SHORT, NEUTRAL
+  chartImageUrl  String?
+  chartImagePath String?
+  context        String
+  teacherDecision String  // "TAKE_TRADE", "WAIT", "AVOID"
+  teacherExplanation String
+  outcome        String?  // "TARGET_HIT", "STOPPED_OUT", "BREAK_EVEN"
+  createdAt      DateTime @default(now())
+
+  lessonId       String?
+  lesson         Lesson?  @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+  conceptId      String?
+  concept        Concept? @relation(fields: [conceptId], references: [id], onDelete: SetNull)
+  ruleId         String?
+  rule           Rule?    @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  setupId        String?
+  setup          Setup?   @relation(fields: [setupId], references: [id], onDelete: SetNull)
+
+  @@index([market])
+  @@index([conceptId])
+  @@index([ruleId])
+}
+
+model CounterExample {
+  id                 String   @id @default(cuid())
+  title              String
+  market             String
+  timeframe          String
+  direction          String   // LONG, SHORT, NEUTRAL
+  chartImageUrl      String?
+  chartImagePath     String?
+  context            String
+  whyInvalid         String   // "Looks like breakout but candle body closed below level"
+  teacherExplanation String
+  createdAt          DateTime @default(now())
+
+  lessonId           String?
+  lesson             Lesson?  @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+  conceptId          String?
+  concept            Concept? @relation(fields: [conceptId], references: [id], onDelete: SetNull)
+  ruleId             String?
+  rule               Rule?    @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  setupId            String?
+  setup              Setup?   @relation(fields: [setupId], references: [id], onDelete: SetNull)
+
+  @@index([market])
+  @@index([conceptId])
+  @@index([ruleId])
+}
+
+model Correction {
+  id                 String   @id @default(cuid())
+  lessonId           String?
+  lesson             Lesson?  @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+  conceptId          String?
+  concept            Concept? @relation(fields: [conceptId], references: [id], onDelete: SetNull)
+  userId             String?
+  user               User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  conceptName        String?
+  condition          String?
+  action             String?
+  alternative        String?
+  reason             String?
+  correctionType     String   @default("WRONG_SETUP") // WRONG_SETUP, MISSING_CONDITION, EXCEPTION_IGNORED, WRONG_ENTRY, WRONG_SL, WRONG_TP, CONTEXT_MISUNDERSTOOD, OTHER
+  ruleId             String?
+
+  previousAiDecision String
+  correctedDecision  String
+  explanation        String
+  affectedRulesText  String?
+  createdAt          DateTime @default(now())
+
+  @@index([conceptId])
+  @@index([createdAt])
+  @@index([correctionType])
+}
+
+model KnowledgeRelation {
+  id           String   @id @default(cuid())
+  fromId       String
+  fromItem     KnowledgeItem @relation("RelationFrom", fields: [fromId], references: [id], onDelete: Cascade)
+  toId         String
+  toItem       KnowledgeItem @relation("RelationTo", fields: [toId], references: [id], onDelete: Cascade)
+  relationType String   // REQUIRES, CONDITIONED_BY, INVALIDATED_BY, EXCEPTION_TO, OVERRIDES, STRENGTHENED_BY, WEAKENED_BY, CONFIRMS, CONFLICTS_WITH, SUPERSEDES, DERIVED_FROM, RELATED_TO, CORRELATES_WITH
+  description  String?
+  confidence   Float    @default(1.0)
+  createdAt    DateTime @default(now())
+
+  @@index([fromId])
+  @@index([toId])
+  @@index([relationType])
+}
+
+model KnowledgeConflict {
+  id                    String   @id @default(cuid())
+  ruleAId               String
+  ruleA                 Rule     @relation("ConflictRuleA", fields: [ruleAId], references: [id], onDelete: Cascade)
+  ruleBId               String
+  ruleB                 Rule     @relation("ConflictRuleB", fields: [ruleBId], references: [id], onDelete: Cascade)
+  conflictType          String   // DIRECT_CONTRADICTION, REFINEMENT, EXCEPTION, TIME_FRAME_DIVERGENCE
+  detectedReason        String?
+  possibleRelationships String?  // JSON string array
+  scopeA                String?
+  scopeB                String?
+  specificityA          Int?
+  specificityB          Int?
+  aiInterpretation      String
+  suggestedAction       String   // EXCEPTION, SUPERSEDE, SEPARATE
+  status                String   @default("UNRESOLVED") // UNRESOLVED, RESOLVED, DISMISSED
+  teacherStatus         String   @default("UNRESOLVED")
+  resolutionNotes       String?
+  resolvedAt            DateTime?
+  createdAt             DateTime @default(now())
+
+  @@index([ruleAId])
+  @@index([ruleBId])
+  @@index([status])
+}
+
+model KnowledgeVersion {
+  id           String   @id @default(cuid())
+  ruleId       String
+  rule         Rule     @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  version      Int
+  statement    String
+  changeReason String
+  lessonId     String?
+  lesson       Lesson?  @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+  createdAt    DateTime @default(now())
+
+  @@index([ruleId])
+}
+
+model Evaluation {
+  id                 String   @id @default(cuid())
+  title              String
+  type               String   // EXAM_HISTORICAL, SCENARIO_VALIDATION, DRILL
+  totalQuestions     Int      @default(0)
+  correctAnswers     Int      @default(0)
+  partialAnswers     Int      @default(0)
+  incorrectAnswers   Int      @default(0)
+  overallScore       Float?
+  notes              String?
+  userId             String?
+  user               User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  createdAt          DateTime @default(now())
+
+  results            EvaluationResult[]
+
+  @@index([createdAt])
+}
+
+model EvaluationResult {
+  id            String   @id @default(cuid())
+  evaluationId  String
+  evaluation    Evaluation @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+  conceptId     String?
+  concept       Concept? @relation(fields: [conceptId], references: [id], onDelete: SetNull)
+  market        String
+  timeframe     String
+  aiDecision    String
+  aiReasoning   String
+  actualDecision String
+  status        String   // CORRECT, PARTIALLY_CORRECT, WRONG
+  feedbackNotes String?
+  createdAt     DateTime @default(now())
+
+  @@index([evaluationId])
+  @@index([conceptId])
+}
+
+model MarketObservation {
+  id             String   @id @default(cuid())
+  symbol         String
+  timeframe      String
+  price          Float
+  detectedLevels String?  // JSON string array of support/resistance
+  marketState    String   // BULLISH_TREND, BEARISH_TREND, RANGE, EXPANSION, CONSOLIDATION
+  notes          String?
+  createdAt      DateTime @default(now())
+
+  @@index([symbol, timeframe])
+  @@index([createdAt])
+}
+
+model AnalysisSession {
+  id             String   @id @default(cuid())
+  source         String   // SCREEN_MONITOR, LIVE_CHART, REPLAY_LAB
+  symbol         String?
+  timeframe      String?
+  status         String   @default("ACTIVE") // ACTIVE, PAUSED, STOPPED
+  startedAt      DateTime @default(now())
+  endedAt        DateTime?
+  totalSnapshots Int      @default(0)
+
+  snapshots      AnalysisSnapshot[]
+
+  @@index([status])
+  @@index([startedAt])
+}
+
+model AnalysisSnapshot {
+  id             String   @id @default(cuid())
+  sessionId      String
+  session        AnalysisSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  imagePath      String?
+  hasVisualDiff  Boolean  @default(false)
+  diffScore      Float?
+  marketState    String
+  activeScenario String?
+  setupStatus    String   @default("NO_TRADE") // OBSERVATION, SETUP_FORMING, SETUP_CONFIRMED, TRADE_CANDIDATE, INVALID_SETUP, WAIT, NO_TRADE
+  direction      String   @default("NEUTRAL")  // LONG, SHORT, NEUTRAL
+  entryPrice     Float?
+  stopLossPrice  Float?
+  takeProfitPrices String? // JSON float array
+  reasoning      String   // JSON string array
+  createdAt      DateTime @default(now())
+
+  aiResponse     AIResponse?
+
+  @@index([sessionId])
+  @@index([setupStatus])
+  @@index([createdAt])
+}
+
+model AIResponse {
+  id               String   @id @default(cuid())
+  snapshotId       String?  @unique
+  snapshot         AnalysisSnapshot? @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  promptPayload    String
+  rawOutput        String
+  structuredOutput String   // JSON validated against StructuredAIResponseSchema
+  modelUsed        String
+  latencyMs        Int?
+  tokensUsed       Int?
+  status           String   @default("NO_TRADE")
+  createdAt        DateTime @default(now())
+
+  feedback         TeacherFeedback?
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+model TeacherFeedback {
+  id           String   @id @default(cuid())
+  aiResponseId String   @unique
+  aiResponse   AIResponse @relation(fields: [aiResponseId], references: [id], onDelete: Cascade)
+  userId       String?
+  user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  isApproved   Boolean
+  rating       Int?     // 1-5
+  comment      String?
+  correctedWhy String?
+  createdAt    DateTime @default(now())
+
+  @@index([isApproved])
+}
+
+// ==========================================
+// COGNITIVE ARCHITECTURE MODELS (Section 41)
+// ==========================================
+
+model Principle {
+  id                    String    @id @default(cuid())
+  title                 String
+  statement             String
+  rationale             String
+  scope                 String    @default("GLOBAL") // GLOBAL, ASSET_SPECIFIC, TIMEFRAME_SPECIFIC
+  status                String    @default("PROPOSED") // PROPOSED, APPROVED, REJECTED
+  confidence            Float     @default(0.8)
+  supportingExperiences String?   // JSON string array of experience IDs
+  sourceLessonsText     String?   // JSON string array of lesson titles
+  teacherNotes          String?
+  approvedAt            DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([status])
+  @@index([scope])
+}
+
+model Experience {
+  id                 String    @id @default(cuid())
+  situationSummary   String
+  market             String    @default("XAUUSD")
+  timeframe          String    @default("5M")
+  worldStateSnapshot String?   // JSON representation of MarketWorldState
+  activeHypotheses   String?   // JSON representation of competing hypotheses
+  aiDecision         String    // WAIT, TRADE_CANDIDATE, etc.
+  aiReasoning        String    // Reasoning explanation
+  teacherDecision    String?   // Teacher's ground truth decision if provided
+  marketOutcome      String?   // JSON containing MFE, MAE, scenarioResolution
+  isSuccess          Boolean?
+  correctionId       String?
+  learnedInsight     String?   // Insight derived from this episode
+  createdAt          DateTime  @default(now())
+
+  @@index([market, timeframe])
+  @@index([aiDecision])
+  @@index([createdAt])
+}
+
+model WorldState {
+  id                 String    @id @default(cuid())
+  instrument         String    @default("XAUUSD")
+  timeframe          String    @default("5M")
+  currentPrice       Float
+  marketRegime       String    // TRENDING_BULLISH, TRENDING_BEARISH, RANGE_BOUND, VOLATILITY_EXPANSION
+  momentum           String    // ACCELERATING, DECELERATING, NEUTRAL
+  volatility         String    // NORMAL, COMPRESSED, EXPANDED
+  swingHighs         String?   // JSON float array
+  swingLows          String?   // JSON float array
+  supportLevels      String?   // JSON float array
+  resistanceLevels   String?   // JSON float array
+  liquidityZones     String?   // JSON string array
+  activeScenario     String?
+  recentEvents       String?   // JSON array of MarketEvent objects
+  uncertaintyScore   Float     @default(0.2)
+  previousStateId    String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([instrument, timeframe])
+  @@index([createdAt])
+}
+
+model MarketEvent {
+  id          String   @id @default(cuid())
+  eventType   String   // NEW_CANDLE, LEVEL_APPROACH, LEVEL_TOUCH, LIQUIDITY_SWEEP, BREAKOUT, BREAKOUT_FAILURE, RETEST, STRUCTURE_BREAK, REJECTION, EXPANSION, VOLATILITY_CHANGE, SETUP_INVALIDATION, TRADE_TRIGGER
+  instrument  String   @default("XAUUSD")
+  timeframe   String   @default("5M")
+  price       Float
+  description String
+  metadata    String?  // JSON details
+  timestamp   DateTime @default(now())
+
+  @@index([instrument, timeframe])
+  @@index([eventType])
+  @@index([timestamp])
+}
+
+model TeacherQuestion {
+  id              String    @id @default(cuid())
+  question        String
+  context         String
+  proposedAction  String?
+  status          String    @default("PENDING") // PENDING, ANSWERED, DISMISSED
+  teacherResponse String?   // YES, NO, EDIT, IGNORE
+  teacherNotes    String?
+  resolvedAt      DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+model Reflection {
+  id                  String   @id @default(cuid())
+  decisionContext     String
+  aiDecision          String
+  marketOutcome       String
+  wasDecisionCorrect  Boolean
+  evaluationNotes     String
+  proposedPrincipleId String?
+  createdAt           DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+model TeachingEvent {
+  id                      String    @id @default(cuid())
+  lessonId                String
+  lesson                  Lesson    @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  timestampSec            Float
+  durationSec             Float?    @default(0)
+  audioSegment            String?   // Spoken words at this timestamp
+  visualState             String?   // JSON: detected levels, chart structure, candle behavior
+  cursorState             String?   // JSON: position, action (POINTING_AT_LEVEL, FOLLOWING_PRICE, etc.)
+  annotationState         String?   // JSON: drawings (HORIZ_LINE, BOX, ARROW, CIRCLE)
+  detectedMarketObjects   String?   // JSON string array e.g. ["RESISTANCE", "BREAKOUT_CANDLE"]
+  teacherIntent           String?   // e.g. "DEFINING_LEVEL", "EXPLAINING_ENTRY_CRITERIA"
+  statementClassification String?   // OBSERVATION, DEFINITION, PRINCIPLE, RULE, EXCEPTION, PREFERENCE, etc.
+  conceptsReferenced      String?   // JSON string array e.g. ["Breakout", "Resistance"]
+  candidateRule           String?   // Proposed rule text
+  candidateException      String?   // Proposed exception text
+  confidence              Float     @default(0.85)
+  evidence                String?   // Multimodal evidence description
+  createdAt               DateTime  @default(now())
+
+  @@index([lessonId])
+  @@index([timestampSec])
+}
+
+model VideoFrame {
+  id              String   @id @default(cuid())
+  lessonId        String
+  lesson          Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  timestampSec    Float
+  filePath        String
+  screenType      String?  // TRADINGVIEW, OBS, BROWSER, DESKTOP, VIDEO_PLAYER, CHART, UNKNOWN
+  analysis        String?  // JSON: vision provider output (levels, market structure, annotations)
+  screenStateHash String?
+  createdAt       DateTime @default(now())
+
+  @@index([lessonId])
+  @@index([timestampSec])
+}
+
+model TeachingSegment {
+  id              String   @id @default(cuid())
+  lessonId        String
+  lesson          Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  startTimeSec    Float
+  endTimeSec      Float
+  title           String
+  transcript      String?
+  visualSummary   String?
+  concepts        String?  // JSON array
+  candidateRules  String?  // JSON array
+  confidence      Float?
+  createdAt       DateTime @default(now())
+
+  @@index([lessonId])
+  @@index([startTimeSec])
+}
+
+model TeachingClaim {
+  id                       String   @id @default(cuid())
+  lessonId                 String
+  lesson                   Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  type                     String   // OBSERVATION, CONCEPT, DEFINITION, RELATIONSHIP, CONDITIONAL_HYPOTHESIS, RULE_CANDIDATE, EXCEPTION, PREFERENCE, PROCEDURE, PREDICTION, CAUSAL_EXPLANATION, EXAMPLE, COUNTEREXAMPLE, CORRECTION, SUMMARY, QUESTION, UNCERTAINTY
+  title                    String
+  subject                  String
+  predicate                String
+  object                   String
+  statement                String
+  conditions               String?  // JSON ClaimCondition[]
+  expectedOutcome          String?
+  action                   String?
+  invalidationConditions   String?  // JSON ClaimCondition[]
+  contradictingEvidence    String?  // JSON string[]
+  whatWouldChangeMyMind    String?
+  reasoningChain           String?  // JSON string[]
+  evidenceEventIds         String?  // JSON string[]
+  sourceTranscriptIds      String?  // JSON string[]
+  sourceFrameIds           String?  // JSON string[]
+  confidence               Float    @default(0.9)
+  evidenceQuality          String   @default("HIGH") // HIGH, MEDIUM, LOW
+  evidenceQualityRationale String?  // JSON string[]
+  explicit                 Boolean  @default(true)
+  inferred                 Boolean  @default(false)
+  timestampSec             Float?
+  status                   String   @default("CANDIDATE") // CANDIDATE, APPROVED, REJECTED
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  @@index([lessonId])
+  @@index([type])
+  @@index([status])
+}
+
+// ==========================================
+// PHASE 3: UNIFIED BRAIN & ADAPTIVE LEARNING
+// ==========================================
+
+model BrainVersion {
+  id               String   @id @default(cuid())
+  version          Float    @default(1.0)
+  versionTag       String   @default("v1.0")
+  changeSummary    String
+  approvedLessonId String?
+  itemCounts       String?  // JSON string
+  createdAt        DateTime @default(now())
+
+  @@index([version])
+  @@index([createdAt])
+}
+
+model AdaptiveQuestion {
+  id                   String            @id @default(cuid())
+  type                 String            // MCQ, TRUE_FALSE, SCENARIO, VISUAL_CHART, EXCEPTION, WHAT_WOULD_YOU_DO, COUNTEREXAMPLE
+  prompt               String
+  scenarioContext      String?
+  chartImageUrl        String?
+  options              String            // JSON string array e.g. ["A", "B", "C", "D"]
+  correctIndex         Int               // 0-based index
+  explanation          String
+  knowledgeType        String            // CONCEPT, HYPOTHESIS, RULE, EXCEPTION, STATE_SEQUENCE, PREFERENCE
+  knowledgeId          String
+  sourceLessonId       String?
+  difficulty           String            @default("MEDIUM") // EASY, MEDIUM, HARD
+  isFollowUp           Boolean           @default(false)
+  parentQuestionId     String?
+  targetedMisconception String?
+  status               String            @default("ACTIVE") // ACTIVE, ARCHIVED
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+
+  attempts             QuestionAttempt[]
+
+  @@index([knowledgeType])
+  @@index([knowledgeId])
+  @@index([status])
+  @@index([difficulty])
+}
+
+model QuestionAttempt {
+  id                 String           @id @default(cuid())
+  questionId         String
+  question           AdaptiveQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  userAnswer         String
+  expectedAnswer     String
+  isCorrect          Boolean
+  reasoningError     String?
+  misconception      String?
+  teacherCorrection  String?
+  conceptName        String?
+  createdAt          DateTime         @default(now())
+
+  @@index([questionId])
+  @@index([isCorrect])
+  @@index([conceptName])
+}
+
+model ConceptMastery {
+  id                   String    @id @default(cuid())
+  conceptName          String    @unique
+  conceptId            String?
+  masteryScore         Float     @default(0.5) // 0.0 - 1.0
+  totalAttempts        Int       @default(0)
+  correctAttempts      Int       @default(0)
+  knownMisconceptions  String?   // JSON string array
+  lastTestedAt         DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([conceptName])
+  @@index([masteryScore])
+}
+
+
